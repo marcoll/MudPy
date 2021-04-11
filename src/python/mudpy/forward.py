@@ -1165,68 +1165,42 @@ def tshift_trace_kernel(nss,ess,zss,nds,eds,zds,
     '''
 
     # Identify the thread in order to know which one of the array elements is ours
-    tid = cuda.grid(1)
-    #Each one of the 6 different datasets (nss, ess, zss, nds, eds, zds) is assigned to a different thread subset
-    dataset = (tid / npts)
-    pos = (tid % npts)
+    pos = cuda.grid(1)
 
-    if (nshift > 0):
-        #This code does the equivalent to:
-        #   arr.data=r_[zeros(nshift),arr.data[0:npts-nshift]]
-        if (pos < nshift):
-            if (dataset == 0):
+    if (pos < npts):
+        if (nshift > 0 and pos < npts):
+            #This code does the equivalent to:
+            #   arr.data=r_[zeros(nshift),arr.data[0:npts-nshift]]
+            if (pos < nshift):
                 nss[pos]=0.0
-            elif (dataset == 1):
                 ess[pos]=0.0
-            elif (dataset == 2):
                 zss[pos]=0.0
-            elif (dataset == 3):
                 nds[pos]=0.0
-            elif (dataset == 4):
                 eds[pos]=0.0
-            elif (dataset == 5):
                 zds[pos]=0.0
-        else:
-            if (dataset == 0):
+            else:
                 nss[pos]=Nss_data_array[index][pos-nshift]
-            elif (dataset == 1):
                 ess[pos]=Ess_data_array[index][pos-nshift]
-            elif (dataset == 2):
                 zss[pos]=Zss_data_array[index][pos-nshift]
-            elif (dataset == 3):
                 nds[pos]=Nds_data_array[index][pos-nshift]
-            elif (dataset == 4):
                 eds[pos]=Eds_data_array[index][pos-nshift]
-            elif (dataset == 5):
-                zds[pos]=Zds_data_array[index][pos-nshift]
-    else:
-        #This code does the equivalent to:
-        #   arr.data=r_[arr.data[-nshift:],arr.data[-1]*ones(-nshift)]
-        if (pos < (npts + nshift)):
-            if (dataset == 0):
-                nss[pos]=Nss_data_array[index][pos-nshift]
-            elif (dataset == 1):
-                ess[pos]=Ess_data_array[index][pos-nshift]
-            elif (dataset == 2):
-                zss[pos]=Zss_data_array[index][pos-nshift]
-            elif (dataset == 3):
-                nds[pos]=Nds_data_array[index][pos-nshift]
-            elif (dataset == 4):
-                eds[pos]=Eds_data_array[index][pos-nshift]
-            elif (dataset == 5):
                 zds[pos]=Zds_data_array[index][pos-nshift]
         else:
-            if (dataset == 0):
+            #This code does the equivalent to:
+            #   arr.data=r_[arr.data[-nshift:],arr.data[-1]*ones(-nshift)]
+            if (pos < (npts + nshift)):
+                nss[pos]=Nss_data_array[index][pos-nshift]
+                ess[pos]=Ess_data_array[index][pos-nshift]
+                zss[pos]=Zss_data_array[index][pos-nshift]
+                nds[pos]=Nds_data_array[index][pos-nshift]
+                eds[pos]=Eds_data_array[index][pos-nshift]
+                zds[pos]=Zds_data_array[index][pos-nshift]
+            else:
                 nss[pos]=Nss_data_array[index][-1]
-            elif (dataset == 1):
                 ess[pos]=Ess_data_array[index][-1]
-            elif (dataset == 2):
                 zss[pos]=Zss_data_array[index][-1]
-            elif (dataset == 3):
                 nds[pos]=Nds_data_array[index][-1]
-            elif (dataset == 4):
                 eds[pos]=Eds_data_array[index][-1]
-            elif (dataset == 5):
                 zds[pos]=Zds_data_array[index][-1]
 
 
@@ -1296,7 +1270,7 @@ def get_fakequakes_G_and_m_dynGF_with_gpu(Nss,Ess,Zss,Nds,Eds,Zds,
 
             # Invoke the kernel to be executed by the GPU, and wait until it finishes
             threadsperblock=128
-            blockspergrid=(((NFFT * 6)/threadsperblock)+1)
+            blockspergrid=((NFFT/threadsperblock)+1)
             tshift_trace_kernel[blockspergrid,threadsperblock](
                 d_nss,d_ess,d_zss,d_nds,d_eds,d_zds,
                 d_Nss_data_array,d_Ess_data_array,d_Zss_data_array,
