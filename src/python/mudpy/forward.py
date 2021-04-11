@@ -1216,7 +1216,6 @@ def get_fakequakes_G_and_m_dynGF_with_gpu(Nss,Ess,Zss,Nds,Eds,Zds,
     import numpy as np
     import datetime
     from datetime import timedelta
-    from scipy.fftpack import fft,ifft #For the convolutions
 
     if forward==True:
         source=genfromtxt(home+project_name+'/forward_models/'+rupture_name)
@@ -1297,19 +1296,12 @@ def get_fakequakes_G_and_m_dynGF_with_gpu(Nss,Ess,Zss,Nds,Eds,Zds,
             total_time=NFFT*dt
             stf=build_source_time_function_with_gpu(rise,dt,total_time,stf_type=source_time_function,dreger_falloff_rate=stf_falloff_rate)
 
-            #Perform the convolutions using the FFT method and trying to avoid duplicate calculations.
-            #In order to convolve two arrays, x and h, we must do:
-            #    L = len(x) + len(h) - 1
-            #    return ifft(fft(x, L) * (fft(h, L))).real
-            #Since stf's FFT calculation is performed 6 times, we can optimize that and do it only once.
-            L=(NFFT+len(stf)-1)
-            fft_stf=fft(stf,L)
-            nss=ifft(fft(nss,L)*fft_stf).real[0:NFFT]
-            ess=ifft(fft(ess,L)*fft_stf).real[0:NFFT]
-            zss=ifft(fft(zss,L)*fft_stf).real[0:NFFT]
-            nds=ifft(fft(nds,L)*fft_stf).real[0:NFFT]
-            eds=ifft(fft(eds,L)*fft_stf).real[0:NFFT]
-            zds=ifft(fft(zds,L)*fft_stf).real[0:NFFT]
+            nss=np.convolve(nss,stf)[0:NFFT]
+            ess=np.convolve(ess,stf)[0:NFFT]
+            zss=np.convolve(zss,stf)[0:NFFT]
+            nds=np.convolve(nds,stf)[0:NFFT]
+            eds=np.convolve(eds,stf)[0:NFFT]
+            zds=np.convolve(zds,stf)[0:NFFT]
 
             #Place in matrix
             G[matrix_pos:matrix_pos+NFFT,2*ksource]=nss
