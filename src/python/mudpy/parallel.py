@@ -78,7 +78,7 @@ def run_parallel_green(home,project_name,station_file,model_name,dt,NFFT,static,
         #Make the calculation
         if static==0: #Compute full waveform
             command=split("fk.pl -M"+model_name+"/"+depth+"/f -N"+str(NFFT)+"/"+str(dt)+'/1/'+repr(dk)+' -P'+repr(pmin)+'/'+repr(pmax)+'/'+repr(kmax)+diststr)
-            p=subprocess.Popen(command,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+            p=subprocess.Popen(command,stdout=subprocess.PIPE)
             p.communicate() 
             # Move files up one level and delete folder created by fk
             files_list=glob(subfault_folder+'/'+model_name+'_'+depth+'/*.grn*')
@@ -95,7 +95,7 @@ def run_parallel_green(home,project_name,station_file,model_name,dt,NFFT,static,
             command=split("fk.pl -M"+model_name+"/"+depth+"/f -N1 "+diststr)
             file_is_empty=True
             while file_is_empty:
-                p=subprocess.Popen(command,stdout=open(write_file,'w'),stderr=subprocess.PIPE)
+                p=subprocess.Popen(command,stdout=open(write_file,'w'))
                 p.communicate()
                 if os.stat(write_file).st_size!=0: #File is NOT empty
                     file_is_empty=False
