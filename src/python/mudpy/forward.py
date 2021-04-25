@@ -1168,7 +1168,7 @@ def tshift_trace_kernel(nss,ess,zss,nds,eds,zds,
     pos = cuda.grid(1)
 
     if (pos < npts):
-        if (nshift > 0 and pos < npts):
+        if (nshift > 0):
             #This code does the equivalent to:
             #   arr.data=r_[zeros(nshift),arr.data[0:npts-nshift]]
             if (pos < nshift):
@@ -3514,7 +3514,7 @@ def build_source_time_function_with_gpu(rise_time,dt,total_time,stf_type='triang
     threadsperblock=128
     blockspergrid=((length/threadsperblock)+1)
 
-    # Copy and allocate the arrays in the device
+    #Allocate the arrays in the device
     d_Mdot=cuda.device_array(length,float)
     d_t=cuda.device_array(length,float)
 
