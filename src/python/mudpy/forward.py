@@ -355,26 +355,30 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
     from numpy import genfromtxt,array
     import datetime
     import numpy as np
+    from mudpy import cuda_kernels
 
     if use_gpu:
-        use_parallel=False
         try:
+            import numba
             from numba import jit,njit,cuda
+            from numba.cuda.cudadrv import devices
+            print("Using GPU (Numba {})".format(numba.__version__))
         except:
             print('Numba is not available...')
             print('Please pip install numba')
             print('Otherwise, this will not use the GPU')
             use_gpu=False
-    else:
-        try:
-            import multiprocessing as mp
-            import time
-            use_parallel=True
-        except:
-            print('Parallel waveform generation is unavailable...')
-            print('Please pip install multiprocessing')
-            print('Otherwise, this is now continue go with single cpu')
-            use_parallel=False
+
+    try:
+        import multiprocessing as mp
+        from multiprocessing.sharedctypes import Value
+        import time
+        use_parallel=True
+    except:
+        print('Parallel waveform generation is unavailable...')
+        print('Please pip install multiprocessing')
+        print('Otherwise, this is now continue go with single cpu')
+        use_parallel=False
 
     print('Solving for kinematic problem(s)')
     #Time for log file
@@ -397,10 +401,13 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
     STAname=np.genfromtxt(home+project_name+'/data/station_info/'+GF_list,usecols=[0],skip_header=1,dtype='S6')
     STA={sta.decode():nsta for nsta,sta in enumerate(STAname)}
 
-    if (use_gpu):
-        print('... copying data to the device')
+
+    def copy_data_to_device():
+        import numba
+        from numba import cuda
 
         #Convert all necessary data into arrays
+        print('... converting data for the device')
         Nss_data_array=to_data_array(Nss)
         Ess_data_array=to_data_array(Ess)
         Zss_data_array=to_data_array(Zss)
@@ -409,6 +416,7 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
         Zds_data_array=to_data_array(Zds)
 
         # Copy the arrays to the device. This data will not be modified, so we only need to do it once
+        print('... copying data to the device')
         d_Nss_data_array=cuda.to_device(Nss_data_array)
         d_Ess_data_array=cuda.to_device(Ess_data_array)
         d_Zss_data_array=cuda.to_device(Zss_data_array)
@@ -416,7 +424,25 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
         d_Eds_data_array=cuda.to_device(Eds_data_array)
         d_Zds_data_array=cuda.to_device(Zds_data_array)
 
-    def loop_sources(ksource,use_gpu):
+        return d_Nss_data_array,d_Ess_data_array,d_Zss_data_array,d_Nds_data_array,d_Eds_data_array,d_Zds_data_array
+
+
+    def loop_sources(ksource,use_parallel,use_gpu,ns):
+        if use_gpu:
+            if use_parallel:
+                #Wait until the data has been copied to the device
+                while (ns.data_copied_to_device==False):
+                    time.sleep(0.1)
+
+                d_Nss_data_array=ns.Nss_h.open()
+                d_Ess_data_array=ns.Ess_h.open()
+                d_Zss_data_array=ns.Zss_h.open()
+                d_Nds_data_array=ns.Nds_h.open()
+                d_Eds_data_array=ns.Eds_h.open()
+                d_Zds_data_array=ns.Zds_h.open()
+            else:
+                d_Nss_data_array,d_Ess_data_array,d_Zss_data_array,d_Nds_data_array,d_Eds_data_array,d_Zds_data_array=copy_data_to_device()
+
         print("...Solving for source {:d} of {:d}".format(ksource,len(all_sources)))
         rupture_name=all_sources[ksource]
         ###make new GF_list(dynamic GF_list)###
@@ -445,19 +471,45 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
         ##Write output
         write_fakequakes_waveforms(home,project_name,rupture_name,waveforms,new_GF_list,NFFT,time_epi,dt)
 
+
+    if use_gpu:
+        #Create process shared memory to exchange the device memory handlers
+        manager=mp.Manager();
+        ns=manager.Namespace()
+
+        #Create a variable to synchronize the different processes
+        ns.data_copied_to_device=False
+    else:
+        ns=None
+
     if use_parallel:
         print('Using cpu=',ncpus)
         #Parallel(n_jobs=ncpus,backend='loky')(delayed(loop_sources)(ksource) for ksource in range(hot_start,len(all_sources))) #Oh no, this is REALLY slow why?
         ps=[]
         for ksource in range(hot_start,len(all_sources)):
-            p = mp.Process(target=loop_sources, args=([ksource,False]) )
+            p = mp.Process(target=loop_sources, args=([ksource,use_parallel,use_gpu,ns]) )
             ps.append(p)
+            p.start()
+
+        #Now that all processes have been forked, we can copy the data to the device
+        if use_gpu:
+            d_Nss_data_array,d_Ess_data_array,d_Zss_data_array,d_Nds_data_array,d_Eds_data_array,d_Zds_data_array=copy_data_to_device()
+
+            #Send the handles to the other processes
+            ns.Nss_h=d_Nss_data_array.get_ipc_handle()
+            ns.Ess_h=d_Ess_data_array.get_ipc_handle()
+            ns.Zss_h=d_Zss_data_array.get_ipc_handle()
+            ns.Nds_h=d_Nds_data_array.get_ipc_handle()
+            ns.Eds_h=d_Eds_data_array.get_ipc_handle()
+            ns.Zds_h=d_Zds_data_array.get_ipc_handle()
+
+            ns.data_copied_to_device=True
+
         #start running
         queue=np.zeros(len(ps))
         for i_ps in range(len(ps)):
             if (i_ps%10==0):
                 print('now at',i_ps,'out of',len(ps))
-            ps[i_ps].start()
             queue[i_ps]=1
             while True:
                 #check running status
@@ -477,6 +529,7 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
                 else:
                     #print('number of queue reaches max:',nprocess,'try again later,now at',i)
                     time.sleep(0.5) #wait and try again later
+
         #Final check if all the processes are done
         while True:
             if np.sum([nps.is_alive() for nps in ps ])==0:
@@ -485,13 +538,9 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
                 time.sleep(1)
 
     else:
-        if use_gpu:
-            import numba
-            print("Using GPU (Numba {})".format(numba.__version__))
-
         #Now loop over rupture models
         for ksource in range(hot_start,len(all_sources)):
-            loop_sources(ksource,use_gpu)
+            loop_sources(ksource,use_parallel,use_gpu,None)
             '''
             print('... solving for source '+str(ksource)+' of '+str(len(all_sources)))
             rupture_name=all_sources[ksource]
@@ -1132,11 +1181,6 @@ def get_fakequakes_G_and_m_dynGF(Nss,Ess,Zss,Nds,Eds,Zds,home,project_name,ruptu
 
 
 
-
-import numba
-from numba import cuda
-import numpy as np
-
 def to_data_array(stream):
     '''
     Convert a stream's data into a 2 dimensional matrix (first dimension
@@ -1145,6 +1189,9 @@ def to_data_array(stream):
     '''
 
     from obspy import Stream
+    import numba
+    from numba import cuda
+    import numpy as np
 
     #Create the array in pinned memory to speed up transfer to the device
     data_array=cuda.pinned_array((stream.count(),stream[0].data.size),dtype=np.float64)
@@ -1152,56 +1199,6 @@ def to_data_array(stream):
         data_array[i]=stream[i].data
 
     return data_array
-
-
-@cuda.jit
-def tshift_trace_kernel(nss,ess,zss,nds,eds,zds,
-                        Nss_data_array,Ess_data_array,Zss_data_array,Nds_data_array,Eds_data_array,Zds_data_array,
-                        index,npts,nshift):
-    '''
-    Does pretty much the same as tshift_trace, but more efficiently and adapted to run on the GPU
-    Warning: nshift has to be calculated outside of the kernel. Otherwise, it crashes. Probably
-    due to some weird compilation bug
-    '''
-
-    # Identify the thread in order to know which one of the array elements is ours
-    pos = cuda.grid(1)
-
-    if (pos < npts):
-        if (nshift > 0):
-            #This code does the equivalent to:
-            #   arr.data=r_[zeros(nshift),arr.data[0:npts-nshift]]
-            if (pos < nshift):
-                nss[pos]=0.0
-                ess[pos]=0.0
-                zss[pos]=0.0
-                nds[pos]=0.0
-                eds[pos]=0.0
-                zds[pos]=0.0
-            else:
-                nss[pos]=Nss_data_array[index][pos-nshift]
-                ess[pos]=Ess_data_array[index][pos-nshift]
-                zss[pos]=Zss_data_array[index][pos-nshift]
-                nds[pos]=Nds_data_array[index][pos-nshift]
-                eds[pos]=Eds_data_array[index][pos-nshift]
-                zds[pos]=Zds_data_array[index][pos-nshift]
-        else:
-            #This code does the equivalent to:
-            #   arr.data=r_[arr.data[-nshift:],arr.data[-1]*ones(-nshift)]
-            if (pos < (npts + nshift)):
-                nss[pos]=Nss_data_array[index][pos-nshift]
-                ess[pos]=Ess_data_array[index][pos-nshift]
-                zss[pos]=Zss_data_array[index][pos-nshift]
-                nds[pos]=Nds_data_array[index][pos-nshift]
-                eds[pos]=Eds_data_array[index][pos-nshift]
-                zds[pos]=Zds_data_array[index][pos-nshift]
-            else:
-                nss[pos]=Nss_data_array[index][-1]
-                ess[pos]=Ess_data_array[index][-1]
-                zss[pos]=Zss_data_array[index][-1]
-                nds[pos]=Nds_data_array[index][-1]
-                eds[pos]=Eds_data_array[index][-1]
-                zds[pos]=Zds_data_array[index][-1]
 
 
 def get_fakequakes_G_and_m_dynGF_with_gpu(Nss,Ess,Zss,Nds,Eds,Zds,
@@ -1216,6 +1213,9 @@ def get_fakequakes_G_and_m_dynGF_with_gpu(Nss,Ess,Zss,Nds,Eds,Zds,
     import numpy as np
     import datetime
     from datetime import timedelta
+    import numba
+    from numba import cuda
+    from mudpy import cuda_kernels
 
     if forward==True:
         source=genfromtxt(home+project_name+'/forward_models/'+rupture_name)
@@ -1270,7 +1270,7 @@ def get_fakequakes_G_and_m_dynGF_with_gpu(Nss,Ess,Zss,Nds,Eds,Zds,
             # Invoke the kernel to be executed by the GPU, and wait until it finishes
             threadsperblock=128
             blockspergrid=((NFFT/threadsperblock)+1)
-            tshift_trace_kernel[blockspergrid,threadsperblock](
+            cuda_kernels.tshift_trace_kernel[blockspergrid,threadsperblock](
                 d_nss,d_ess,d_zss,d_nds,d_eds,d_zds,
                 d_Nss_data_array,d_Ess_data_array,d_Zss_data_array,
                 d_Nds_data_array,d_Eds_data_array,d_Zds_data_array,
@@ -3445,70 +3445,14 @@ def build_source_time_function(rise_time,dt,total_time,stf_type='triangle',zeta=
     return t,Mdot
 
 
-import math
-
-@cuda.jit
-def triangle_stf_kernel(Mdot,t,rise_time,dt,time_offset,m,b1,b2):
-    # Identify the thread in order to know which one of the array elements is ours
-    i = cuda.grid(1)
-
-    if (i < len(Mdot)):
-        t[i] = dt * i
-
-        if (t[i] <= rise_time / 2):
-            Mdot[i] = m * t[i] + b1
-        elif (t[i] > rise_time):
-            Mdot[i] = 0.0
-        elif (t[i] > rise_time / 2):
-            Mdot[i] = -m * t[i] + b2
-        else:
-            Mdot[i] = 0.0
-
-        #offset origin time
-        t[i] = t[i] + time_offset
-
-
-@cuda.jit
-def cosine_stf_kernel(Mdot,t,rise_time,dt,time_offset,tau1,tau2,Cn):
-    # Identify the thread in order to know which one of the array elements is ours
-    i = cuda.grid(1)
-
-    if (i < len(Mdot)):
-        t[i] = dt * i
-
-        if (t[i] < tau1):
-            Mdot[i] = Cn * (0.7 - 0.7 * math.cos(t[i] * math.pi / tau1) +0.6 * math.sin(0.5 * math.pi * t[i] / tau1))
-        elif ((t[i] >= tau1) & (t[i] < 2 * tau1)):
-            Mdot[i] = Cn * (1.0 - 0.7 * math.cos(t[i] * math.pi / tau1) + 0.3 * math.cos(math.pi * (t[i] - tau1) / tau2))
-        elif ((t[i] >= 2 * tau1) & (t[i] < rise_time)):
-            Mdot[i] = Cn * (0.3 + 0.3 * math.cos(math.pi * (t[i] - tau1) / tau2))
-        else:
-            Mdot[i] = 0.0
-
-        #offset origin time
-        t[i] = t[i] + time_offset
-
-
-@cuda.jit
-def dreger_stf_kernel(Mdot,t,dt,time_offset,zeta,tau):
-    # Identify the thread in order to know which one of the array elements is ours
-    i = cuda.grid(1)
-
-    if (i < len(Mdot)):
-        t[i] = dt * i
-
-        Mdot[i] = (t[i] ** zeta) * math.exp(-t[i] / tau)
-
-        #offset origin time
-        t[i] = t[i] + time_offset
-
-
 def build_source_time_function_with_gpu(rise_time,dt,total_time,stf_type='triangle',zeta=0.2,dreger_falloff_rate=4,scale=True,time_offset=0):
     '''
     Does the same as build_source_time_function, but optimized to run on the GPU
     '''
     from numpy import pi,cos,sin,isnan,exp
     from scipy.integrate import trapz
+    from numba import cuda
+    from mudpy import cuda_kernels
 
     length=int(round((total_time+dt)/dt,0))
     threadsperblock=128
@@ -3527,18 +3471,18 @@ def build_source_time_function_with_gpu(rise_time,dt,total_time,stf_type='triang
         b2=m*(rise_time)
 
         #Assign moment rate using the GPU
-        triangle_stf_kernel[blockspergrid,threadsperblock](d_Mdot,d_t,rise_time,dt,time_offset,m,b1,b2)
+        cuda_kernels.triangle_stf_kernel[blockspergrid,threadsperblock](d_Mdot,d_t,rise_time,dt,time_offset,m,b1,b2)
     elif stf_type=='cosine':   #From Liu et al. (2006) BSSA, eq 7a,7b
         tau1=0.13*rise_time
         tau2=rise_time-tau1
         Cn=pi/(1.4*pi*tau1+1.2*tau1+0.3*pi*tau2)
 
         #Build in pieces using the GPU
-        cosine_stf_kernel[blockspergrid,threadsperblock](d_Mdot,d_t,rise_time,dt,time_offset,tau1,tau2,Cn)
+        cuda_kernels.cosine_stf_kernel[blockspergrid,threadsperblock](d_Mdot,d_t,rise_time,dt,time_offset,tau1,tau2,Cn)
     elif stf_type=='dreger':
         tau=rise_time/dreger_falloff_rate
 
-        dreger_stf_kernel[blockspergrid,threadsperblock](d_Mdot,d_t,dt,time_offset,zeta,tau)
+        cuda_kernels.dreger_stf_kernel[blockspergrid,threadsperblock](d_Mdot,d_t,dt,time_offset,zeta,tau)
     else:
         print('ERROR: unrecognized STF type '+stf_type)
         return
