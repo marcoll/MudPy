@@ -4,7 +4,6 @@ Marc Coll 05/2021
 CUDA kernels for those methods that use the GPU
 '''
 
-import numpy as np
 import math
 import numba
 from numba import cuda

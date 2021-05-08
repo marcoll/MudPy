@@ -373,7 +373,7 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
         import multiprocessing as mp
         from multiprocessing.sharedctypes import Value
         import time
-        use_parallel=True
+        use_parallel=(ncpus>1)
     except:
         print('Parallel waveform generation is unavailable...')
         print('Please pip install multiprocessing')
@@ -431,8 +431,7 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
         if use_gpu:
             if use_parallel:
                 #Wait until the data has been copied to the device
-                while (ns.data_copied_to_device==False):
-                    time.sleep(0.1)
+                semaphore.acquire(True)
 
                 d_Nss_data_array=ns.Nss_h.open()
                 d_Ess_data_array=ns.Ess_h.open()
@@ -471,14 +470,24 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
         ##Write output
         write_fakequakes_waveforms(home,project_name,rupture_name,waveforms,new_GF_list,NFFT,time_epi,dt)
 
+        #Release the semaphore, so that the next process can start working
+        if use_gpu and use_parallel:
+            semaphore.release()
+
 
     if use_gpu:
         #Create process shared memory to exchange the device memory handlers
         manager=mp.Manager();
         ns=manager.Namespace()
 
-        #Create a variable to synchronize the different processes
-        ns.data_copied_to_device=False
+        '''
+        Create a semaphore to synchronize the different processes. This is also used to
+        control how many of them are running at the same time, since too many of them
+        connected to the GPU can lead to memory problems (CUDA_ERROR_OUT_OF_MEMORY).
+        The idea is to use ncpus as the maximum number of processes allowed to run at
+        the same time.
+        '''
+        semaphore=mp.Semaphore(0)
     else:
         ns=None
 
@@ -503,7 +512,9 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
             ns.Eds_h=d_Eds_data_array.get_ipc_handle()
             ns.Zds_h=d_Zds_data_array.get_ipc_handle()
 
-            ns.data_copied_to_device=True
+            #Control the amount of processes accessing the GPU at the same time (ncpus at most)
+            for i in range(ncpus):
+                semaphore.release()
 
         #start running
         queue=np.zeros(len(ps))
