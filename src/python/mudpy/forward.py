@@ -299,7 +299,6 @@ def waveforms_fakequakes(home,project_name,fault_name,rupture_list,GF_list,
     print('... loading all synthetics into memory')
     Nss,Ess,Zss,Nds,Eds,Zds=load_fakequakes_synthetics(home,project_name,fault_name,model_name,GF_list,G_from_file,G_name)
     print('... ... done')
-    print(str(datetime.datetime.now()))
     
     #Now loop over rupture models
     for ksource in range(hot_start,len(all_sources)):
@@ -397,7 +396,6 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
     print('... loading all synthetics into memory')
     Nss,Ess,Zss,Nds,Eds,Zds=load_fakequakes_synthetics(home,project_name,fault_name,model_name,GF_list,G_from_file,G_name)
     print('... ... done loading synthetics')
-    print(str(datetime.datetime.now()))
 
     #Load GF_list
     STAname=np.genfromtxt(home+project_name+'/data/station_info/'+GF_list,usecols=[0],skip_header=1,dtype='S6')
@@ -429,9 +427,7 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
         return d_Nss_data_array,d_Ess_data_array,d_Zss_data_array,d_Nds_data_array,d_Eds_data_array,d_Zds_data_array
 
 
-    def loop_sources(ksource,use_parallel,use_gpu,ns=None,
-                     d_Nss_data_array=None,d_Ess_data_array=None,d_Zss_data_array=None,
-                     d_Nds_data_array=None,d_Eds_data_array=None,d_Zds_data_array=None):
+    def loop_sources(ksource,use_parallel,use_gpu,ns):
         if use_gpu:
             if use_parallel:
                 #Wait until the data has been copied to the device
@@ -443,6 +439,8 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
                 d_Nds_data_array=ns.Nds_h.open()
                 d_Eds_data_array=ns.Eds_h.open()
                 d_Zds_data_array=ns.Zds_h.open()
+            else:
+                d_Nss_data_array,d_Ess_data_array,d_Zss_data_array,d_Nds_data_array,d_Eds_data_array,d_Zds_data_array=copy_data_to_device()
 
         print("...Solving for source {:d} of {:d}".format(ksource,len(all_sources)))
         rupture_name=all_sources[ksource]
@@ -551,15 +549,9 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
                 time.sleep(1)
 
     else:
-        if use_gpu:
-            d_Nss_data_array,d_Ess_data_array,d_Zss_data_array,d_Nds_data_array,d_Eds_data_array,d_Zds_data_array=copy_data_to_device()
-
         #Now loop over rupture models
         for ksource in range(hot_start,len(all_sources)):
-            if use_gpu:
-                loop_sources(ksource,use_parallel,use_gpu,None,d_Nss_data_array,d_Ess_data_array,d_Zss_data_array,d_Nds_data_array,d_Eds_data_array,d_Zds_data_array)
-            else:
-                loop_sources(ksource,use_parallel,use_gpu)
+            loop_sources(ksource,use_parallel,use_gpu,None)
             '''
             print('... solving for source '+str(ksource)+' of '+str(len(all_sources)))
             rupture_name=all_sources[ksource]
