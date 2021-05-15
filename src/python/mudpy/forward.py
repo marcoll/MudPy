@@ -401,11 +401,7 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
     STAname=np.genfromtxt(home+project_name+'/data/station_info/'+GF_list,usecols=[0],skip_header=1,dtype='S6')
     STA={sta.decode():nsta for nsta,sta in enumerate(STAname)}
 
-
-    def copy_data_to_device():
-        import numba
-        from numba import cuda
-
+    if use_gpu:
         #Convert all necessary data into arrays
         print('... converting data for the device')
         Nss_data_array=to_data_array(Nss)
@@ -415,32 +411,11 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
         Eds_data_array=to_data_array(Eds)
         Zds_data_array=to_data_array(Zds)
 
-        # Copy the arrays to the device. This data will not be modified, so we only need to do it once
-        print('... copying data to the device')
-        d_Nss_data_array=cuda.to_device(Nss_data_array)
-        d_Ess_data_array=cuda.to_device(Ess_data_array)
-        d_Zss_data_array=cuda.to_device(Zss_data_array)
-        d_Nds_data_array=cuda.to_device(Nds_data_array)
-        d_Eds_data_array=cuda.to_device(Eds_data_array)
-        d_Zds_data_array=cuda.to_device(Zds_data_array)
 
-        return d_Nss_data_array,d_Ess_data_array,d_Zss_data_array,d_Nds_data_array,d_Eds_data_array,d_Zds_data_array
-
-
-    def loop_sources(ksource,use_parallel,use_gpu,ns):
-        if use_gpu:
-            if use_parallel:
-                #Wait until the data has been copied to the device
-                semaphore.acquire(True)
-
-                d_Nss_data_array=ns.Nss_h.open()
-                d_Ess_data_array=ns.Ess_h.open()
-                d_Zss_data_array=ns.Zss_h.open()
-                d_Nds_data_array=ns.Nds_h.open()
-                d_Eds_data_array=ns.Eds_h.open()
-                d_Zds_data_array=ns.Zds_h.open()
-            else:
-                d_Nss_data_array,d_Ess_data_array,d_Zss_data_array,d_Nds_data_array,d_Eds_data_array,d_Zds_data_array=copy_data_to_device()
+    def loop_sources(ksource,use_parallel,use_gpu):
+        if use_gpu and use_parallel:
+            #Wait until the data has been copied to the device
+            semaphore.acquire(True)
 
         print("...Solving for source {:d} of {:d}".format(ksource,len(all_sources)))
         rupture_name=all_sources[ksource]
@@ -459,7 +434,7 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
         #use only close stations (dynamic GF_list)
         if use_gpu:
             m,G=get_fakequakes_G_and_m_dynGF_with_gpu(Nss,Ess,Zss,Nds,Eds,Zds,
-                                                      d_Nss_data_array,d_Ess_data_array,d_Zss_data_array,d_Nds_data_array,d_Eds_data_array,d_Zds_data_array,
+                                                      Nss_data_array,Ess_data_array,Zss_data_array,Nds_data_array,Eds_data_array,Zds_data_array,
                                                       home,project_name,rupture_name,time_epi,STA,new_GF_list,epicenter,NFFT,source_time_function,stf_falloff_rate,forward=forward)
         else:
             m,G=get_fakequakes_G_and_m_dynGF(Nss,Ess,Zss,Nds,Eds,Zds,home,project_name,rupture_name,
@@ -476,10 +451,6 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
 
 
     if use_gpu:
-        #Create process shared memory to exchange the device memory handlers
-        manager=mp.Manager();
-        ns=manager.Namespace()
-
         '''
         Create a semaphore to synchronize the different processes. This is also used to
         control how many of them are running at the same time, since too many of them
@@ -496,22 +467,12 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
         #Parallel(n_jobs=ncpus,backend='loky')(delayed(loop_sources)(ksource) for ksource in range(hot_start,len(all_sources))) #Oh no, this is REALLY slow why?
         ps=[]
         for ksource in range(hot_start,len(all_sources)):
-            p = mp.Process(target=loop_sources, args=([ksource,use_parallel,use_gpu,ns]) )
+            p = mp.Process(target=loop_sources, args=([ksource,use_parallel,use_gpu]) )
             ps.append(p)
             p.start()
 
         #Now that all processes have been forked, we can copy the data to the device
         if use_gpu:
-            d_Nss_data_array,d_Ess_data_array,d_Zss_data_array,d_Nds_data_array,d_Eds_data_array,d_Zds_data_array=copy_data_to_device()
-
-            #Send the handles to the other processes
-            ns.Nss_h=d_Nss_data_array.get_ipc_handle()
-            ns.Ess_h=d_Ess_data_array.get_ipc_handle()
-            ns.Zss_h=d_Zss_data_array.get_ipc_handle()
-            ns.Nds_h=d_Nds_data_array.get_ipc_handle()
-            ns.Eds_h=d_Eds_data_array.get_ipc_handle()
-            ns.Zds_h=d_Zds_data_array.get_ipc_handle()
-
             #Control the amount of processes accessing the GPU at the same time (ncpus at most)
             for i in range(ncpus):
                 semaphore.release()
@@ -551,7 +512,7 @@ def waveforms_fakequakes_dynGF(home,project_name,fault_name,rupture_list,GF_list
     else:
         #Now loop over rupture models
         for ksource in range(hot_start,len(all_sources)):
-            loop_sources(ksource,use_parallel,use_gpu,None)
+            loop_sources(ksource,use_parallel,use_gpu)
             '''
             print('... solving for source '+str(ksource)+' of '+str(len(all_sources)))
             rupture_name=all_sources[ksource]
@@ -1196,16 +1157,13 @@ def to_data_array(stream):
     '''
     Convert a stream's data into a 2 dimensional matrix (first dimension
     is the stream number, second dimension is the actual data), so that it
-    can be passed to the CUDA kernel
+    can be easily passed to the CUDA kernel
     '''
 
     from obspy import Stream
-    import numba
-    from numba import cuda
     import numpy as np
 
-    #Create the array in pinned memory to speed up transfer to the device
-    data_array=cuda.pinned_array((stream.count(),stream[0].data.size),dtype=np.float64)
+    data_array=np.empty((stream.count(),stream[0].data.size),dtype=np.float64)
     for i in range(stream.count()):
         data_array[i]=stream[i].data
 
@@ -1213,7 +1171,7 @@ def to_data_array(stream):
 
 
 def get_fakequakes_G_and_m_dynGF_with_gpu(Nss,Ess,Zss,Nds,Eds,Zds,
-                                          d_Nss_data_array,d_Ess_data_array,d_Zss_data_array,d_Nds_data_array,d_Eds_data_array,d_Zds_data_array,
+                                          Nss_data_array,Ess_data_array,Zss_data_array,Nds_data_array,Eds_data_array,Zds_data_array,
                                           home,project_name,rupture_name,time_epi,STA,GF_list,epicenter,NFFT,
                                           source_time_function,stf_falloff_rate,forward=False):
     '''
@@ -1270,6 +1228,14 @@ def get_fakequakes_G_and_m_dynGF_with_gpu(Nss,Ess,Zss,Nds,Eds,Zds,
             #How many positions from start of tr to start of trace?
             nshift=int(round((tstart-time_epi)/dt))
 
+            # Copy the data to the device
+            d_Nss_data_array=cuda.to_device(Nss_data_array[index])
+            d_Ess_data_array=cuda.to_device(Ess_data_array[index])
+            d_Zss_data_array=cuda.to_device(Zss_data_array[index])
+            d_Nds_data_array=cuda.to_device(Nds_data_array[index])
+            d_Eds_data_array=cuda.to_device(Eds_data_array[index])
+            d_Zds_data_array=cuda.to_device(Zds_data_array[index])
+
             # Allocate the result arrays in the device
             d_nss=cuda.device_array(NFFT)
             d_ess=cuda.device_array(NFFT)
@@ -1285,7 +1251,7 @@ def get_fakequakes_G_and_m_dynGF_with_gpu(Nss,Ess,Zss,Nds,Eds,Zds,
                 d_nss,d_ess,d_zss,d_nds,d_eds,d_zds,
                 d_Nss_data_array,d_Ess_data_array,d_Zss_data_array,
                 d_Nds_data_array,d_Eds_data_array,d_Zds_data_array,
-                index,NFFT,nshift)
+                NFFT,nshift)
 
             # Wait until execution has finished
             cuda.synchronize()

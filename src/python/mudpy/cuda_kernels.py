@@ -12,7 +12,7 @@ from numba import cuda
 @cuda.jit
 def tshift_trace_kernel(nss,ess,zss,nds,eds,zds,
                         Nss_data_array,Ess_data_array,Zss_data_array,Nds_data_array,Eds_data_array,Zds_data_array,
-                        index,npts,nshift):
+                        npts,nshift):
     '''
     Does pretty much the same as tshift_trace, but more efficiently and adapted to run on the GPU
     Warning: nshift has to be calculated outside of the kernel. Otherwise, it crashes. Probably
@@ -34,29 +34,29 @@ def tshift_trace_kernel(nss,ess,zss,nds,eds,zds,
                 eds[pos]=0.0
                 zds[pos]=0.0
             else:
-                nss[pos]=Nss_data_array[index][pos-nshift]
-                ess[pos]=Ess_data_array[index][pos-nshift]
-                zss[pos]=Zss_data_array[index][pos-nshift]
-                nds[pos]=Nds_data_array[index][pos-nshift]
-                eds[pos]=Eds_data_array[index][pos-nshift]
-                zds[pos]=Zds_data_array[index][pos-nshift]
+                nss[pos]=Nss_data_array[pos-nshift]
+                ess[pos]=Ess_data_array[pos-nshift]
+                zss[pos]=Zss_data_array[pos-nshift]
+                nds[pos]=Nds_data_array[pos-nshift]
+                eds[pos]=Eds_data_array[pos-nshift]
+                zds[pos]=Zds_data_array[pos-nshift]
         else:
             #This code does the equivalent to:
             #   arr.data=r_[arr.data[-nshift:],arr.data[-1]*ones(-nshift)]
             if (pos < (npts + nshift)):
-                nss[pos]=Nss_data_array[index][pos-nshift]
-                ess[pos]=Ess_data_array[index][pos-nshift]
-                zss[pos]=Zss_data_array[index][pos-nshift]
-                nds[pos]=Nds_data_array[index][pos-nshift]
-                eds[pos]=Eds_data_array[index][pos-nshift]
-                zds[pos]=Zds_data_array[index][pos-nshift]
+                nss[pos]=Nss_data_array[pos-nshift]
+                ess[pos]=Ess_data_array[pos-nshift]
+                zss[pos]=Zss_data_array[pos-nshift]
+                nds[pos]=Nds_data_array[pos-nshift]
+                eds[pos]=Eds_data_array[pos-nshift]
+                zds[pos]=Zds_data_array[pos-nshift]
             else:
-                nss[pos]=Nss_data_array[index][-1]
-                ess[pos]=Ess_data_array[index][-1]
-                zss[pos]=Zss_data_array[index][-1]
-                nds[pos]=Nds_data_array[index][-1]
-                eds[pos]=Eds_data_array[index][-1]
-                zds[pos]=Zds_data_array[index][-1]
+                nss[pos]=Nss_data_array[-1]
+                ess[pos]=Ess_data_array[-1]
+                zss[pos]=Zss_data_array[-1]
+                nds[pos]=Nds_data_array[-1]
+                eds[pos]=Eds_data_array[-1]
+                zds[pos]=Zds_data_array[-1]
 
 
 @cuda.jit
